@@ -1,8 +1,5 @@
 --- @meta
-
------------------------------------------------------------
--- Properties
------------------------------------------------------------
+--- @diagnostic disable: undefined-doc-name, duplicate-doc-field, duplicate-doc-alias
 
 --- @class LuaScriptProperty
 --- Property definition for Lua scripts.
@@ -27,11 +24,10 @@ LuaScriptProperty = {}
 function property(t) end
 
 --- Same as `property`, but always adds `PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_STORAGE` to the property's usage flags.
---- Similar to GDScript's `@export` annotation.
+--- Similar to GDScript's `@export` annotation. Has subtables for property hints and usage.
 --- @see property
---- @param t table | any
 --- @return LuaScriptProperty
-function export(t) end
+function export() end
 
 --- Creates a `PROPERTY_USAGE_CATEGORY` property.
 --- Note that the category name will be the key used in your class for this property.
@@ -212,62 +208,3 @@ function export_subgroup(prefix) end
 --- @param ... string | any
 --- @return LuaScriptProperty
 function export_tool_button(...) end
-
-
------------------------------------------------------------
--- Signals
------------------------------------------------------------
-
---- @class LuaScriptSignal
---- Signal definition for Lua scripts.
-LuaScriptSignal = {}
-
---- Used to define custom signals in Lua scripts.
---- For now there is no way to pass type information for arguments, only their names.
---- ```
---- local MyClass = {}
---- MyClass.some_signal = signal("argument1", "argument2")
---- return MyClass
---- ```
---- @param ... string
---- @return LuaScriptSignal
-function signal(...) end
-
-
------------------------------------------------------------
--- RPC configuration
------------------------------------------------------------
-
---- Similar to GDScript's `@rpc` annotation, should be used to initialize the special `rpc_config` table.
---- Example:
---- ```
---- local MyClass = {}
---- 
---- function MyClass:some_method() end
---- function MyClass:some_other_method() end
---- 
---- MyClass.rpc_config = {
----   "some_method" = rpc("any_peer", "call_local", "reliable", 0),
----   "some_other_method" = rpc("reliable", 1),
---- }
---- 
---- return MyClass
---- ```
---- See [@rpc](https://docs.godotengine.org/en/stable/classes/class_@gdscript.html#class-gdscript-annotation-rpc) for more information.
---- 
---- @param mode "any_peer" | "authority" | nil
---- @param sync "call_remote" | "call_local" | nil
---- @param transfer_mode "unreliable" | "unreliable_ordered" | "reliable" | nil
---- @param transfer_channel integer?
-function rpc(mode, sync, transfer_mode, transfer_channel) end
-
-
------------------------------------------------------------
--- Misc
------------------------------------------------------------
-
---- Creates a table suitable for defining Godot Classes in Lua scripts.
---- The only thing special about it is that `pairs` iterates over its keys in order of insertion,
---- so that its properties and methods are shown in order of definition in the Godot Editor.
---- @return table
-function GDCLASS() end
