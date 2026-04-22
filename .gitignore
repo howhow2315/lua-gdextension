@@ -33,7 +33,8 @@ test/godot
 addons/lua-gdextension/CHANGELOG.md
 addons/lua-gdextension/README.md
 addons/lua-gdextension/LICENSE
-addons/lua-gdextension/lua_api_definitions/builtin_classes.lua
-addons/lua-gdextension/lua_api_definitions/classes.lua
-addons/lua-gdextension/lua_api_definitions/global_enums.lua
-addons/lua-gdextension/lua_api_definitions/utility_functions.lua
+addons/lua-gdextension/lua_api_definitions
+!addons/lua-gdextension/lua_api_definitions/manual
+
+# Godot documentation files that were pulled
+godot_docs

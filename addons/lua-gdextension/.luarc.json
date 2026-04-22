@@ -1,0 +1,7 @@
+{
+  "workspace": {
+    "ignoreDir": ["addons/lua-gdextension/build"],
+    "library": ["addons/lua-gdextension/lua_api_definitions/"],
+    "preloadFileSize": 5000
+  }
+}

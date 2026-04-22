@@ -1,7 +1,5 @@
 {
-    "workspace": {
-        "library": [
-            "addons/lua-gdextension/lua_api_definitions"
-        ]
-    }
+  "workspace": {
+      "library": ["addons/lua-gdextension/lua_api_definitions"]
+  }
 }
