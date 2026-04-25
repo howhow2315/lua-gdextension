@@ -1,330 +1,360 @@
 import requests
-import re
 import pathlib
-from pathlib import Path
+from typing import Any, Dict, List, Optional
+import xml.etree.ElementTree as ET
 
 CACHE = pathlib.Path("godot_docs")
 CACHE.mkdir(exist_ok=True)
 
+# potentially add translation (.po) support
+# https://github.com/godotengine/godot/blob/master/doc/translations
 DOC_LANGUAGE = "en"
 DOC_DIR = CACHE / f"{DOC_LANGUAGE}"
 DOC_DIR.mkdir(exist_ok=True)
 
-DOC_GODOT_VERSION = "stable"
-DOCS_URL_BASE = f"https://docs.godotengine.org/{DOC_LANGUAGE}"
+# example xml file
+# https://raw.githubusercontent.com/godotengine/godot/refs/heads/master/doc/classes/%40GlobalScope.xml
+ENGINE_DOCS_BASE = "https://raw.githubusercontent.com/godotengine/godot/refs/heads/master/doc/classes"
 
-CLASS_URL_BASE = f"{DOCS_URL_BASE}/{DOC_GODOT_VERSION}/classes"
-CLASS_SOURCE_URL_BASE = f"{DOCS_URL_BASE}/_sources/classes"
+def get_class_xml(name: str) -> str:
+    path = DOC_DIR / f"{name}.xml"
+    url = f"{ENGINE_DOCS_BASE}/{name}.xml"
 
-GLOBALS_URL = f"{DOCS_URL_BASE}/classes/class_%40globalscope.html" # `#enum-globalscope-mousebuttonmask`
-GLOBALS_SOURCE_URL = f"{DOCS_URL_BASE}/_sources/classes/class_%40globalscope.rst.txt"
-GLOBALS_PATH = CACHE / "@globals.rst.txt"
-
-
-def get_rst(path, url):
-    print(path, url)
     if not path.exists():
-        page = requests.get(url)
-        path.write_text(page.text, encoding="utf-8")
-        print(page.text)
+        print("fetching", url)
+        text = requests.get(url).text
+        path.write_text(text, encoding="utf-8")
+
     return path.read_text(encoding="utf-8")
 
-def get_class_rst(name):
-    name = name.lower()
 
-    class_file = f"class_{name}.rst.txt"
-    path = DOC_DIR / class_file
-    url = f"{CLASS_URL_BASE}/{class_file}"
+def parse_godot_class_xml(xml_text: str) -> Dict[str, Any]:
+    root = ET.fromstring(xml_text)
 
-    return get_rst(path, url)
+    if root.tag != "class":
+        raise ValueError("Expected root tag <class>")
 
-def get_globals_rst():
-    return get_rst(GLOBALS_PATH, GLOBALS_SOURCE_URL)
-
-
-def godot_ref_to_md(line: str) -> str:
-    """Convert Godot <class_...> and <enum_...> references, and standard URLs to Markdown links."""
-    
-    def repl(match):
-        text, identifier = match.groups()
-        
-        if "_property_" in identifier: # handle class references with properties
-            parts = identifier.split("_property_")
-            class_part = parts[0].replace("class_", "").lower()
-            property_part = parts[1].replace("_", "-").replace("/", "-")
-            url = f"{CLASS_URL_BASE}/class_{class_part}.html#class-{class_part}-property-{property_part}"
-
-        elif "_enum_" in identifier: # handle enum references
-            parts = identifier.split("_enum_")
-            enum_part = parts[1].replace("_", "-").lower()
-            url = f"{CLASS_URL_BASE}/enum_{enum_part}.html"
-
-        elif "_@globalscope_" in identifier: # handle @GlobalScope references
-            parts = identifier.split("_@globalscope_")
-            global_part = parts[1].lower()
-            url = f"{GLOBALS_URL}#{global_part}"
-
-        else: # handle class references without properties
-            class_part = identifier.replace("class_", "").lower()
-            url = f"{CLASS_URL_BASE}/class_{class_part}.html"
-        
-        return f"[{text}]({url})"
-    
-    def url_repl(match):
-        # match text followed by a URL in angle brackets and format it into a Markdown link
-        text, url = match.group(1), match.group(2)
-        return f"[{text}]({url})"
-
-    # convert Godot class references (<class_...>)
-    line = re.sub(r'([^\s`]+)<class_([^>]+)>', repl, line)
-
-    # convert Godot enum references (<enum_...>)
-    line = re.sub(r'([^\s`]+)<enum_([^>]+)>', repl, line)
-
-    # convert text <URL> into Markdown [text](URL) and remove backticks
-    line = re.sub(r'`([^\s`]+) <(https?://[^\s>]+)>`', url_repl, line)
-    
-    return line
-
-
-def parse_doc_block(block: str) -> tuple[str, str] | None:
-    """Parse a property or method block."""
-
-    lines = block.splitlines()
-    if not lines:
-        return None
-
-    name = lines[0].rstrip(":").strip()
-    doc_lines = []
-    in_doc = False
-
-    for line in lines[1:]:
-        if not line:
-            if in_doc:
-                doc_lines.append("")
-            continue
-
-        # skip RST directives, anchors, set/get signatures
-        if any(line.startswith(p) for p in [".. rst-class::", "- |", ".. _", ".. |"]) or (line.startswith("-") and "**" in line):
-            continue        
-
-        in_doc = True
-        line = godot_ref_to_md(line)
-        line = line.replace("``", "`")
-        line = re.sub(r':ref:`([^`]+)`', r'\1', line)
-        line = line.rstrip("`").replace("__", "").replace("|", "")
-        doc_lines.append(line)
-
-    if doc_lines:
-        while doc_lines and doc_lines[-1] in ("", "----"):
-            doc_lines.pop()
-        return name, "\n".join(doc_lines)
-
-    return None
-
-
-def parse_section(key: str, splitter_keyword: str, text: str) -> dict[str, str]:
-    """Parse all blocks within a given section specified by the splitter keyword."""
-
-    # find the starting index of the section by the keyword
-    section_split = re.split(rf"\n{splitter_keyword}\n[-]+\n", text)
-
-    # if no match is found, return empty dict
-    if len(section_split) < 2:
-        # print(f"error cant find section match for {splitter_keyword} to parse")
-        return {}
-
-    # extract the section starting from the second split part
-    section_text = section_split[1]
-
-    # look for the stop marker and cut off everything after it
-    stop_index = section_text.find(".. rst-class:: classref-descriptions-group")
-    if stop_index != -1:
-        section_text = section_text[:stop_index]
-    
-    # split by the class definition pattern (e.g., _class_DisplayServer_...)
-    blocks = re.split(rf"\n\.\. _class_[^_]+_{key}_", section_text)[1:]
-    
-    result = {}
-    for block in blocks:
-        block.strip()
-        if block:
-            # look for a stop marker and cut off everything after it
-            stop_index = block.find(".. rst-class:: classref-item-separator")
-            if stop_index != -1:
-                block = block[:stop_index]
-
-            parsed = parse_doc_block(block)
-            if parsed:
-                result[parsed[0]] = parsed[1]
-
-    return result
-
-def parse_class(name: str) -> dict[str, dict[str, str]]:
-    """Return structured class data with dynamic section parsing."""
-
-    text = get_class_rst(name)
-
-    # initialize empty dictionary to hold final class data
-    class_data = {}
-
-    # define a mapping of section keys to their corresponding header keywords
-    section_mapping = {
-        "enums": {
-            "title": "Enumerations",
-            "key": "constant"
-        },
-        "constants": {
-            "title": "Constants",
-            "key": "constant"
-        },
-        "properties": {
-            "title": "Property Descriptions",
-            "key": "property"
-        },
-        "methods": {
-            "title": "Method Descriptions",
-            "key": "method"
-        },
-        "signals": {
-            "title": "Signals",
-            "key": "signal"
-        }
+    class_data: Dict[str, Any] = {
+        "name": root.get("name"),
+        "inherits": root.get("inherits"),
+        "version": root.get("version"),
+        "api_type": root.get("api_type"),
+        "brief_description": "",
+        "description": "",
+        "tutorials": [],
+        "constants": {},
+        "methods": {},
+        "members": {},
+        "signals": {},
+        "theme_items": {},
     }
 
-    # for each section, call parse_section with the appropriate keyword
-    for key, mapping in section_mapping.items():
-        class_data[key] = parse_section(mapping["key"], mapping["title"], text)
+    for child in root:
+        tag = child.tag
+
+        if tag == "brief_description":
+            class_data["brief_description"] = (child.text or "").strip()
+
+        elif tag == "description":
+            class_data["description"] = (child.text or "").strip()
+
+        elif tag == "tutorials":
+            for link in child.findall("link"):
+                class_data["tutorials"].append({
+                    "title": link.get("title", ""),
+                    "href": (link.text or "").strip()
+                })
+
+        elif tag == "constants":
+            for const in child.findall("constant"):
+                name = const.get("name")
+                if name:
+                    class_data["constants"][name] = {
+                        "value": const.get("value"),
+                        "enum": const.get("enum"),
+                        "description": (const.text or "").strip()
+                    }
+
+        elif tag == "methods":
+            for method in child.findall("method"):
+                name = method.get("name")
+                if not name:
+                    continue
+
+                qualifiers = method.get("qualifiers")
+
+                # Return type
+                return_elem = method.find("return")
+                return_type = return_elem.get("type") if return_elem is not None else "void"
+
+                # Arguments
+                arguments: List[Dict[str, str]] = []
+                for arg in method.findall("param"):
+                    arguments.append({
+                        "index": int(arg.get("index", 0)),
+                        "name": arg.get("name", ""),
+                        "type": arg.get("type", ""),
+                        # default value if present in newer XML
+                        "default": arg.get("default")
+                    })
+                # Sort by index just in case
+                arguments.sort(key=lambda a: a["index"])
+
+                description = ""
+                desc_elem = method.find("description")
+                if desc_elem is not None:
+                    description = (desc_elem.text or "").strip()
+
+                class_data["methods"][name] = {
+                    "qualifiers": qualifiers,
+                    "return_type": return_type,
+                    "arguments": arguments,
+                    "description": description,
+                }
+
+        elif tag == "members":
+            for member in child.findall("member"):
+                name = member.get("name")
+                if name:
+                    class_data["members"][name] = {
+                        "type": member.get("type"),
+                        "setter": member.get("setter"),
+                        "getter": member.get("getter"),
+                        "default": member.get("default"),
+                        "description": (member.text or "").strip(),
+                    }
+
+        elif tag == "signals":
+            for signal in child.findall("signal"):
+                name = signal.get("name")
+                if not name:
+                    continue
+
+                arguments: List[Dict[str, str]] = []
+                for arg in signal.findall("argument"):
+                    arguments.append({
+                        "index": int(arg.get("index", 0)),
+                        "name": arg.get("name", ""),
+                        "type": arg.get("type", ""),
+                    })
+                arguments.sort(key=lambda a: a["index"])
+
+                description = ""
+                desc_elem = signal.find("description")
+                if desc_elem is not None:
+                    description = (desc_elem.text or "").strip()
+
+                class_data["signals"][name] = {
+                    "arguments": arguments,
+                    "description": description,
+                }
+
+        elif tag == "theme_items":
+            for item in child.findall("theme_item"):
+                name = item.get("name")
+                if name:
+                    class_data["theme_items"][name] = {
+                        "type": item.get("type"),
+                        "description": (item.text or "").strip(),
+                    }
 
     return class_data
 
-def parse_globals(name: str) -> dict[str, dict[str, str]]:
-    """Return structured class data with dynamic section parsing."""
-    
-    text = get_class_rst(name)
+def get_class_data(name: str) -> Dict[str, Any]:
+    xml_text = get_class_xml(name)
+    return parse_godot_class_xml(xml_text)
 
-    # initialize empty dictionary to hold final class data
-    class_data = {}
+godot_type_to_lua_mapping = {
+    # "int": "integer",
+    # "float": "float",
+    # "bool": "boolean",
+    # "String": "string",
+    # "StringName": "string",
+    # "NodePath": "string",
+    # "Array": "table",
+    # "Dictionary": "table",
+    # "Variant": "any",
+    # "void": "nil",
+    # "Object": "table",
+}
+def godot_type_to_lua(godot_type: str) -> str:
+    return godot_type_to_lua_mapping.get(godot_type, godot_type)
 
-    # define a mapping of section keys to their corresponding header keywords
-    section_mapping = {
-        "enums": {
-            "title": "Enumerations",
-            "key": "constant"
-        },
-        "constants": {
-            "title": "Constants",
-            "key": "constant"
-        },
-        "properties": {
-            "title": "Property Descriptions",
-            "key": "property"
-        },
-        "methods": {
-            "title": "Method Descriptions",
-            "key": "method"
-        },
-        "signals": {
-            "title": "Signals",
-            "key": "signal"
-        }
-    }
+godot_param_name_to_lua_mapping = {
+    "end": "_end"
+}
+def godot_param_name_to_lua(godot_name: str) -> str:
+    return godot_param_name_to_lua_mapping.get(godot_name, godot_name)
 
-    # for each section, call parse_section with the appropriate keyword
-    for key, mapping in section_mapping.items():
-        class_data[key] = parse_section(mapping["key"], mapping["title"], text)
+def xml_to_md(xml_text):
+    text = xml_text.replace("	", "").strip()
+    # text = text.replace("\n", " ")
+    text = text.replace("\n", "\n--- ")
 
-    return class_data
+    # bold
+    text = text.replace("[b]", "**").replace("[/b]", "**")
 
+    # codeblocks
+    text = text.replace("[code]", "`").replace("[/code]", "`")
+    text = text.replace("[codeblock]", "```gdscript").replace("[/codeblock]", "```")
 
-# # https://docs.godotengine.org/en/stable/classes/class_%40globalscope.html#enumerations
-# # includes
-# def parse_global_scope():
-    
+    return text
 
-def md_to_lua_comments(md: str) -> str:
-    lines = md.splitlines()
-    lua_lines = []
-    previous_was_blank = False
+def godot_class_to_lua_annotations(class_data: dict) -> str:
+    """Convert parsed Godot class XML data into LuaLS annotation comments."""
+    lines = []
 
-    inside_code = False
-    
-    for line in lines:
-        line = line.replace("\\ ", "").replace(".. tabs::", "")
+    class_name = class_data["name"]
+    inherits = class_data.get("inherits")
 
-        stripped = line.strip()
-        is_code = stripped.startswith(".. code")
-        is_rst_marker = stripped.startswith("..")
+    is_global = class_name == "@GlobalScope"
 
-        # detect end of tabs block or other directive
-        if inside_code and is_rst_marker:                
-            line_count = len(lua_lines)
-            if lua_lines[line_count - 1] == "---":
-                lua_lines.pop(line_count - 1)
+    def parse_args(tbl):
+        args = tbl.get("arguments", [])
+        params = []
+        for arg in args:
+            arg_name = godot_param_name_to_lua(arg.get("name", f"arg{arg.get("index", 0)}"))
+            arg_type = arg.get("type", "any")
+            # arg_type = arg.get("type", "nil")
+            # LLS uses lowercase common types: number, string, boolean, table, etc.
+            lua_type = godot_type_to_lua(arg_type)
+
+            params.append(arg_name)
+            # lines.append(f"{arg_name}:{lua_type}")
+            lines.append(f"---@param {arg_name} {lua_type}")
+        return args, ", ".join(params)
+
+    def separate_comment(txt):
+        return txt.replace("\n", "\n\n")
+
+    # class / global scope
+    if not is_global: 
+        lines.append(f"--- @class {class_name}")
+        if inherits:
+            lines.append(f"--- @field super {inherits}") # or use inheritance if your Lua binding supports it
+    # full description
+    if class_data["brief_description"]:
+        brief_description = class_data["brief_description"]
+        lines.append(f"--- {brief_description}")
+        lines.append("---")
+    if class_data["description"]:
+        description = separate_comment(class_data["description"])
+        lines.append(f"--- {description}")
+    if not is_global: lines.append(f"{class_name} = {{}}")
+    lines.append("")
+
+    # constants
+    if class_data["constants"]:
+        lines.append("\n--- [[ Constants ]]\n")
+        for name, const in sorted(class_data["constants"].items()):
+            value = const.get("value", "nil")
+            desc = const.get("description", "")
+            enum = const.get("enum", "")
+
+            if enum: lines.append(f"--- @type {enum}")
+            lines.append(f"--- {desc}")
+            if is_global: 
+                lines.append(f"{name} = {value}")
+            else:
+                lines.append(f"{class_name}.{name} = {value}")
+        lines.append("")
+
+    # members (Properties)
+    if class_data["members"]:
+        lines.append("\n--- [[ Properties ]]\n")
+        for name, member in sorted(class_data["members"].items()):
+            # {'type': 'Geometry2D', 'setter': '', 'getter': '', 'default': None, 'description': 'The [Geometry2D] singleton.'}
+            typ = godot_type_to_lua(member.get("type", "any"))
+            if member["description"]:
+                lines.append(f"--- {separate_comment(member["description"])}")
+            lines.append(f"--- @type {typ}")
+            if is_global: 
+                lines.append(f"{name} = nil")
+            else:
+                lines.append(f"{class_name}.{name} = nil")
+        lines.append("")
+
+    # signals
+    if class_data["signals"]:
+        lines.append("\n--- [[ Signals ]]\n")
+        for name, sig in class_data["signals"].items():
+            desc = sig.get("description", "")
+            arguments = sig.get("arguments")
+            parse_args(sig)
+
+            if desc:
+                lines.append(f"--- {desc}")
             
-            inside_code = False
-            lua_lines.append(f"--- ```")
-            lua_lines.append(f"---")
+            if is_global: 
+                lines.append(f"\n{name} = signal()")
+            else:
+                lines.append(f"\n{class_name}.{name} = signal()")
+        lines.append("")
 
-        # detect a new code tab
-        if is_code and not inside_code:
-            inside_code = True
-            current_lang = line.split("::", 1)[1].strip()
-            lua_lines.append(f"--- ***{current_lang}***")    # '--- gdscript'
-            lua_lines.append(f"--- ```{current_lang}")       # '--- ```gdscript'
-            continue
+    # methods
+    if class_data["methods"]:
+        lines.append("\n--- [[ Methods ]]\n")
+        for name, method in sorted(class_data["methods"].items()):
+            return_type = godot_type_to_lua(method.get("return_type", "void"))
+            if name == "clamp":
+                print(method)
 
+            # build parameter list
+            args, params = parse_args(method)
 
-        if not line:
-            # preserve paragraph spacing with a single comment line``
-            if not previous_was_blank:
-                lua_lines.append("---")
-            previous_was_blank = True
-            continue
+            # description
+            desc = method.get("description", "")
 
-        # add regular line as Lua comment
-        lua_lines.append(f"--- {line}")
-        previous_was_blank = False
-    
-    if inside_code:
-        lua_lines.append(f"--- ```")
+            # qualifiers (e.g. vararg, const)
+            qualifiers = method.get("qualifiers")
+            if qualifiers:
+                desc = f"[{qualifiers}] {desc}".strip()
 
-    return "\n".join(lua_lines)
+            # write the annotation block
+            if return_type != "nil":
+                lines.append(f"---@return {return_type}")
 
+            if desc:
+                lines.append(f"--- {desc}")
+
+            # The actual function declaration (for completion + hover)
+            if is_global: 
+                lines.append(f"function {name}({params}) end")
+            else:
+                lines.append(f"function {class_name}.{name}({params}) end")
+            lines.append("")
+
+    # theme items (rarely needed for Lua)
+    if class_data.get("theme_items"):
+        lines.append("\n--- [[ Theme Items ]]\n")
+        for name, item in class_data["theme_items"].items():
+            typ = godot_type_to_lua(item.get("type", "any"))
+            desc = item.get("description", "")
+            if desc: 
+                lines.append(f"--- {desc}")
+            lines.append(f"--- @field {name} {typ}")
+        
+    page = [
+        "---@diagnostic disable: missing-return, undefined-doc-name, assign-type-mismatch"
+    ]
+    for line in lines:
+        page.append(xml_to_md(line))
+
+    return "\n".join(page)
+
+def get_godot_class_lua_annotations(cls):
+    path = DOC_DIR / f"{cls}.lua"
+
+    text = godot_class_to_lua_annotations(get_class_data(cls))
+    path.write_text(text, encoding="utf-8")
+
+    return text
 
 def _class_test():
-    _class = "MultiplayerPeer"
-    class_data = parse_class(_class)
-    print(f"{_class} = {list(class_data.keys())}")
-    for key, value in class_data.items():
-        print(f"{key}: {len(value)}")
-    
-    # example_property = "get_physics_frames" #"max_fps"
-    # properties = class_data["properties"]
-    # # print(f"{_class}'s Properties:", list(properties.keys()))
-    # print(f"\n{_class} Lua comment example for '{example_property}':\n")
-    # print(md_to_lua_comments(properties[example_property]))
-
-    # example_method = "get_physics_frames"
-    # methods = class_data["methods"]
-    # # print(f"{_class}'s Methods:", list(methods.keys()))
-    # print(f"\n{_class} Lua comment example for '{example_method}':\n")
-    # print(md_to_lua_comments(methods[example_method]))
-
-    # example_enum = "CONNECTION_CONNECTED"
-    # enums = class_data["enums"]
-    # print(f"{_class}'s Enums:", list(enums.keys()))
-    # print(f"\n{_class} Lua comment example for '{example_enum}':\n")
-    # print(md_to_lua_comments(enums[example_enum]))
-
-    example_signal = "peer_connected"
-    signals = class_data["signals"]
-    # print(f"{_class}'s Signals:", list(signals.keys()))
-    print(f"\n{_class} Lua comment example for '{example_signal}':\n")
-    print(md_to_lua_comments(signals[example_signal]))
-
-def _globals_test():
-    _globals = get_globals_rst()
+    _class = "@GlobalScope"
+    # _class = "MultiplayerPeer"
+    # print(get_godot_class_lua_annotations(_class))
+    get_godot_class_lua_annotations(_class)
 
 if __name__ == "__main__":
     _class_test()

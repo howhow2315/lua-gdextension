@@ -1,15 +1,10 @@
-"""
-Generates a Lua file with Lua Language Server annotations based on extension_api.json and Godots docs
-"""
+"""Generates a Lua file with Lua Language Server annotations based on extension_api.json and Godots docs"""
 
 import os
 import json
 from textwrap import dedent
 
 from json_types import *
-
-from doc_scraper import parse_class, md_to_lua_comments
-
 
 SRC_DIR = os.path.dirname(__file__)
 DEST_DIR = os.path.join(SRC_DIR, "..", "..", "addons", "lua-gdextension", "lua_api_definitions")
@@ -117,6 +112,7 @@ def _generate_section(name: str) -> str:
 def _arg_name(name: str) -> str:
     return LUA_KEYWORD_MAP.get(name, name)
 
+# TODO: update from rst special typings to xml
 def _arg_type(name: str, has_default: Any = False) -> str:
     # handle 'const' removal as 'const' isn't present in Lua
     if "const" in name:
