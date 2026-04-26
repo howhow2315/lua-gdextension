@@ -1,24 +1,36 @@
-import requests
-import pathlib
-from typing import Any, Dict, List, Optional
+import re, requests, pathlib
 import xml.etree.ElementTree as ET
 
 CACHE = pathlib.Path("godot_docs")
 CACHE.mkdir(exist_ok=True)
 
+GODOT_VER = "master"
+GODOT_VER = "4.6"
+
 # potentially add translation (.po) support
 # https://github.com/godotengine/godot/blob/master/doc/translations
-DOC_LANGUAGE = "en"
-DOC_DIR = CACHE / f"{DOC_LANGUAGE}"
+# DOC_LANGUAGE = "en"
+DOC_DIR = CACHE / f"{GODOT_VER}"
 DOC_DIR.mkdir(exist_ok=True)
 
 # example xml file
 # https://raw.githubusercontent.com/godotengine/godot/refs/heads/master/doc/classes/%40GlobalScope.xml
-ENGINE_DOCS_BASE = "https://raw.githubusercontent.com/godotengine/godot/refs/heads/master/doc/classes"
+DOCS_BASE = f"https://raw.githubusercontent.com/godotengine/godot/refs/heads/{GODOT_VER}/doc/classes"
+
+# https://docs.godotengine.org/en/stable/classes/class_multiplayerpeer.html
+WIKI_VER = "stable"
+WIKI_URL_BASE = f"https://docs.godotengine.org/en/{WIKI_VER}"
+WIKI_URL_BASE_CLASS = f"{WIKI_URL_BASE}/classes/class_"
+
+# example local wiki reference
+# [constant PROPERTY_USAGE_SCRIPT_VARIABLE]
+# could we link to our definition instead? i think that might be better
+# ---@see PROPERTY_USAGE_SCRIPT_VARIABLE
+# https://docs.godotengine.org/en/stable/classes/class_@globalscope.html#class-globalscope-constant-property-usage-script-variable
 
 def get_class_xml(name: str) -> str:
     path = DOC_DIR / f"{name}.xml"
-    url = f"{ENGINE_DOCS_BASE}/{name}.xml"
+    url = f"{DOCS_BASE}/{name}.xml"
 
     if not path.exists():
         print("fetching", url)
@@ -26,7 +38,6 @@ def get_class_xml(name: str) -> str:
         path.write_text(text, encoding="utf-8")
 
     return path.read_text(encoding="utf-8")
-
 
 def parse_godot_class_xml(xml_text: str) -> Dict[str, Any]:
     root = ET.fromstring(xml_text)
@@ -46,7 +57,6 @@ def parse_godot_class_xml(xml_text: str) -> Dict[str, Any]:
         "methods": {},
         "members": {},
         "signals": {},
-        "theme_items": {},
     }
 
     for child in root:
@@ -83,21 +93,20 @@ def parse_godot_class_xml(xml_text: str) -> Dict[str, Any]:
 
                 qualifiers = method.get("qualifiers")
 
-                # Return type
+                # return type
                 return_elem = method.find("return")
                 return_type = return_elem.get("type") if return_elem is not None else "void"
 
-                # Arguments
+                # arguments
                 arguments: List[Dict[str, str]] = []
                 for arg in method.findall("param"):
                     arguments.append({
                         "index": int(arg.get("index", 0)),
                         "name": arg.get("name", ""),
                         "type": arg.get("type", ""),
-                        # default value if present in newer XML
                         "default": arg.get("default")
                     })
-                # Sort by index just in case
+                # sort by index just in case
                 arguments.sort(key=lambda a: a["index"])
 
                 description = ""
@@ -149,15 +158,6 @@ def parse_godot_class_xml(xml_text: str) -> Dict[str, Any]:
                     "description": description,
                 }
 
-        elif tag == "theme_items":
-            for item in child.findall("theme_item"):
-                name = item.get("name")
-                if name:
-                    class_data["theme_items"][name] = {
-                        "type": item.get("type"),
-                        "description": (item.text or "").strip(),
-                    }
-
     return class_data
 
 def get_class_data(name: str) -> Dict[str, Any]:
@@ -167,155 +167,229 @@ def get_class_data(name: str) -> Dict[str, Any]:
 godot_type_to_lua_mapping = {
     # "int": "integer",
     # "float": "float",
-    # "bool": "boolean",
-    # "String": "string",
-    # "StringName": "string",
-    # "NodePath": "string",
-    # "Array": "table",
-    # "Dictionary": "table",
-    # "Variant": "any",
-    # "void": "nil",
-    # "Object": "table",
+    "bool": "boolean",
+    None: "nil"
 }
 def godot_type_to_lua(godot_type: str) -> str:
     return godot_type_to_lua_mapping.get(godot_type, godot_type)
 
+# fix invalid mappings due to syntax differences across languages
 godot_param_name_to_lua_mapping = {
     "end": "_end"
 }
 def godot_param_name_to_lua(godot_name: str) -> str:
     return godot_param_name_to_lua_mapping.get(godot_name, godot_name)
 
-def xml_to_md(xml_text):
-    text = xml_text.replace("	", "").strip()
+def xml_to_md(text, class_name):
+    # references (example: [method Image.rotate_90])
+    def repl_ref(m):
+        kind = m.group(1)
+        name = m.group(2)
+
+        is_global = class_name == "@GlobalScope"
+        scope = class_name
+        class_part = class_name.lower()
+
+        # anchor formatting differs slightly per type
+        anchor = f"class-{class_part}-{kind}-{name.lower()}"
+
+        url = f"{WIKI_URL_BASE_CLASS}{class_part}.html#{anchor}"
+        link = f"[{name}]({url})"
+
+        if is_global:
+            return f"{link}\n--- @see {name}"
+        else:
+            return f"{link}\n--- @see {scope}.{name}"
+        
+    text = re.sub(
+        r"\[(constant|member|method|signal|enum|param)\s+([A-Za-z0-9_]+)\]",
+        repl_ref,
+        text
+    )
+
+    # url blocks (example: [url=https://github.com/godotengine/godot/issues]the GitHub Issue Tracker[/url])
+    def repl_url(m):
+        url = m.group(1)
+        text = m.group(2)
+        return f"[{text}]({url})"
+
+    text = re.sub(
+        r"\[url=(.*?)\](.*?)\[/url\]",
+        repl_url,
+        text,
+        flags=re.DOTALL
+    )
+
+    # titled href; [$CLASS] -> [$CLASS]($DOCS_URL/$CLASS)
+    def repl(m):
+        name = m.group(1)
+        return f"[{name}]({WIKI_URL_BASE_CLASS}{name.lower()}.html)"
+
+    text = re.sub(
+        r"\[([A-Z][A-Za-z0-9_]*)\](?!\()",
+        repl,
+        text
+    )
+
+    # whitespace
+    text = text.replace("	", "").strip()
+
+    # newlines
     # text = text.replace("\n", " ")
-    text = text.replace("\n", "\n--- ")
+    # text = text.replace("\n", "\n--- ")
 
     # bold
     text = text.replace("[b]", "**").replace("[/b]", "**")
 
-    # codeblocks
+    # italics
+    text = text.replace("[i]", "*").replace("[/i]", "*")
+
+    #code
     text = text.replace("[code]", "`").replace("[/code]", "`")
+    
+    # codeblock
     text = text.replace("[codeblock]", "```gdscript").replace("[/codeblock]", "```")
+    text = text.replace("[gdscript]", "```gdscript\n--- # GDScript").replace("[/gdscript]", "```")
+    text = text.replace("[csharp]", "\n--- ```csharp\n--- // C#").replace("[/csharp]", "```")
+
+    # codeblocks
+    text = text.replace("[codeblocks]", "").replace("[/codeblocks]", "")
 
     return text
 
 def godot_class_to_lua_annotations(class_data: dict) -> str:
     """Convert parsed Godot class XML data into LuaLS annotation comments."""
-    lines = []
 
     class_name = class_data["name"]
     inherits = class_data.get("inherits")
 
     is_global = class_name == "@GlobalScope"
 
+    lines = [
+        f"---@diagnostic disable: missing-return, undefined-doc-name, assign-type-mismatch{is_global and ", lowercase-global" or ""}",
+        ""
+    ]
+
+    # helpers
     def parse_args(tbl):
         args = tbl.get("arguments", [])
         params = []
         for arg in args:
             arg_name = godot_param_name_to_lua(arg.get("name", f"arg{arg.get("index", 0)}"))
-            arg_type = arg.get("type", "any")
-            # arg_type = arg.get("type", "nil")
-            # LLS uses lowercase common types: number, string, boolean, table, etc.
-            lua_type = godot_type_to_lua(arg_type)
+            arg_type = godot_type_to_lua(arg.get("type", "any"))
 
             params.append(arg_name)
-            # lines.append(f"{arg_name}:{lua_type}")
-            lines.append(f"---@param {arg_name} {lua_type}")
+            lines.append(f"---@param {arg_name} {arg_type}")
         return args, ", ".join(params)
 
-    def separate_comment(txt):
-        return txt.replace("\n", "\n\n")
+    def clean_comment(txt):
+        return txt.replace("\n", "\n--- ")
+
+    def add_section(_title):
+        lines.append("")
+        lines.append(f"--- [[ {_title} ]]")
+        lines.append("")
+
+    def add_description(_desc, _append = ""):
+        if _desc:
+            lines.append(f"--- {clean_comment(_desc)}")
+            if _append:
+                lines.append(_append)
 
     # class / global scope
     if not is_global: 
         lines.append(f"--- @class {class_name}")
         if inherits:
-            lines.append(f"--- @field super {inherits}") # or use inheritance if your Lua binding supports it
+            lines.append(f"--- @field super {inherits}") # TODO potentially use inheritance instead if LLS works better with it
+
     # full description
-    if class_data["brief_description"]:
-        brief_description = class_data["brief_description"]
-        lines.append(f"--- {brief_description}")
-        lines.append("---")
-    if class_data["description"]:
-        description = separate_comment(class_data["description"])
-        lines.append(f"--- {description}")
-    if not is_global: lines.append(f"{class_name} = {{}}")
+    add_description(class_data.get("brief_description", ""), "---")
+    add_description(class_data.get("description", ""))
+
+    # tutorials
+    if not is_global:
+        tutorials = class_data["tutorials"]
+        if tutorials:
+            for tutorial in tutorials:
+                lines.append("---")
+                lines.append(f"--- **Tutorial:** [{tutorial["title"]}]({tutorial["href"].replace("$DOCS_URL", WIKI_URL_BASE)})")
+        lines.append(f"{class_name} = {{}}")
     lines.append("")
 
     # constants
     if class_data["constants"]:
-        lines.append("\n--- [[ Constants ]]\n")
+        add_section("Constants")
         for name, const in sorted(class_data["constants"].items()):
             value = const.get("value", "nil")
-            desc = const.get("description", "")
             enum = const.get("enum", "")
+            add_description(const.get("description", ""))
 
             if enum: lines.append(f"--- @type {enum}")
-            lines.append(f"--- {desc}")
             if is_global: 
                 lines.append(f"{name} = {value}")
             else:
                 lines.append(f"{class_name}.{name} = {value}")
-        lines.append("")
+            lines.append("")
 
     # members (Properties)
     if class_data["members"]:
-        lines.append("\n--- [[ Properties ]]\n")
+        add_section("Properties")
         for name, member in sorted(class_data["members"].items()):
             # {'type': 'Geometry2D', 'setter': '', 'getter': '', 'default': None, 'description': 'The [Geometry2D] singleton.'}
+            value = member.get("default", "nil")
+            add_description(member.get("description", ""))
+            
+            if is_global:
+                # subclasses (aka global members/singletons)
+                if value == None:
+                    value = "{}"
+            else:
+                value = godot_type_to_lua(value)
+                
             typ = godot_type_to_lua(member.get("type", "any"))
-            if member["description"]:
-                lines.append(f"--- {separate_comment(member["description"])}")
+            
             lines.append(f"--- @type {typ}")
             if is_global: 
-                lines.append(f"{name} = nil")
+                lines.append(f"{name} = {value}")
             else:
-                lines.append(f"{class_name}.{name} = nil")
-        lines.append("")
+                lines.append(f"{class_name}.{name} = {value}")
+            lines.append("")
 
     # signals
     if class_data["signals"]:
-        lines.append("\n--- [[ Signals ]]\n")
+        add_section("Signals")
         for name, sig in class_data["signals"].items():
-            desc = sig.get("description", "")
             arguments = sig.get("arguments")
-            parse_args(sig)
+            args, params = parse_args(sig)
+            add_description(sig.get("description", ""))
 
-            if desc:
-                lines.append(f"--- {desc}")
-            
             if is_global: 
-                lines.append(f"\n{name} = signal()")
+                lines.append(f"{name} = signal()")
             else:
-                lines.append(f"\n{class_name}.{name} = signal()")
-        lines.append("")
+                lines.append(f"{class_name}.{name} = signal()")
+            lines.append("")
 
     # methods
     if class_data["methods"]:
-        lines.append("\n--- [[ Methods ]]\n")
+        add_section("Methods")
         for name, method in sorted(class_data["methods"].items()):
             return_type = godot_type_to_lua(method.get("return_type", "void"))
-            if name == "clamp":
-                print(method)
 
             # build parameter list
             args, params = parse_args(method)
 
+            # write the annotation block
+            if return_type != "nil": lines.append(f"---@return {return_type}")
+
             # description
-            desc = method.get("description", "")
+            desc = clean_comment(method.get("description", ""))
 
             # qualifiers (e.g. vararg, const)
+            # i dont think we can apply this to Lua, but the info itself is valuable
             qualifiers = method.get("qualifiers")
-            if qualifiers:
-                desc = f"[{qualifiers}] {desc}".strip()
+            if qualifiers: desc = f"[{qualifiers}] {desc}".strip()
 
-            # write the annotation block
-            if return_type != "nil":
-                lines.append(f"---@return {return_type}")
-
-            if desc:
-                lines.append(f"--- {desc}")
+            if desc: lines.append(f"--- {desc}")
 
             # The actual function declaration (for completion + hover)
             if is_global: 
@@ -324,23 +398,7 @@ def godot_class_to_lua_annotations(class_data: dict) -> str:
                 lines.append(f"function {class_name}.{name}({params}) end")
             lines.append("")
 
-    # theme items (rarely needed for Lua)
-    if class_data.get("theme_items"):
-        lines.append("\n--- [[ Theme Items ]]\n")
-        for name, item in class_data["theme_items"].items():
-            typ = godot_type_to_lua(item.get("type", "any"))
-            desc = item.get("description", "")
-            if desc: 
-                lines.append(f"--- {desc}")
-            lines.append(f"--- @field {name} {typ}")
-        
-    page = [
-        "---@diagnostic disable: missing-return, undefined-doc-name, assign-type-mismatch"
-    ]
-    for line in lines:
-        page.append(xml_to_md(line))
-
-    return "\n".join(page)
+    return xml_to_md("\n".join(lines), class_name)
 
 def get_godot_class_lua_annotations(cls):
     path = DOC_DIR / f"{cls}.lua"
@@ -353,7 +411,6 @@ def get_godot_class_lua_annotations(cls):
 def _class_test():
     _class = "@GlobalScope"
     # _class = "MultiplayerPeer"
-    # print(get_godot_class_lua_annotations(_class))
     get_godot_class_lua_annotations(_class)
 
 if __name__ == "__main__":
