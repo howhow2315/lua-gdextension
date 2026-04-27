@@ -5,10 +5,13 @@ import json
 from textwrap import dedent
 
 from json_types import *
+import generate_lua_docs
 
 SRC_DIR = os.path.dirname(__file__)
-DEST_DIR = os.path.join(SRC_DIR, "..", "..", "addons", "lua-gdextension", "lua_api_definitions")
-API_JSON_PATH = os.path.join(SRC_DIR, "..", "..", "lib", "godot-cpp", "gdextension", "extension_api.json")
+PROJECT_ROOT = os.path.join(SRC_DIR, "..", "..")
+DEST_DIR = os.path.join(PROJECT_ROOT, "addons", "lua-gdextension", "lua_api_definitions")
+API_JSON_PATH = os.path.join(PROJECT_ROOT, "lib", "godot-cpp", "gdextension", "extension_api.json")
+LUA_CLASSES_PATH = os.path.join(PROJECT_ROOT, "doc_classes")
 
 OPERATOR_MAP = {
     ## LLS doesn't really support equality operators: https://github.com/LuaLS/lua-language-server/issues/1882
@@ -53,519 +56,74 @@ PREAMBLE = [
 def main():
     with open(API_JSON_PATH, encoding="utf-8") as f: extension_api = json.load(f)
 
-    # global_enums (global enums)
-    enums_dir = os.path.join(DEST_DIR, "enums")
-    os.makedirs(enums_dir, exist_ok=True)
-    enums = generate_enums(extension_api["global_enums"])
-    for i, v in enums.items():
-        with open(os.path.join(enums_dir, f"{i}.lua"), "w") as f:
-            _write_to_file(f, v)
+    # classes = []
 
-    # utility_functions (global functions)
-    functions_dir = os.path.join(DEST_DIR, "functions")
-    os.makedirs(functions_dir, exist_ok=True)
-    functions = generate_functions(extension_api["utility_functions"])
-    for i, v in functions.items():
-        with open(os.path.join(functions_dir, f"{i}.lua"), "w") as f:
-            _write_to_file(f, v)
+    def write_lua_comment(dir, name):
+        try:
+            lua_comment = generate_lua_docs.get_godot_class_lua_annotations(name)
+        except Exception as e:
+            print(f"Failed to get class data for {name}: Have you tried checking if the Godot doc version has this class? 'master' should if its not outdated or invalid")
+            return
 
-    # builtin_classes (variants)
-    variants_dir = os.path.join(DEST_DIR, "variants")
-    os.makedirs(variants_dir, exist_ok=True)
-    variants = generate_variants(extension_api["builtin_classes"])
-    for i, v in variants.items():
-        with open(os.path.join(variants_dir, f"{i}.lua"), "w") as f:
-            _write_to_file(f, v)
+        with open(os.path.join(dir, f"{name}.lua"), "w") as f:
+            f.write(lua_comment)
+
+    # # builtin_classes (variants)
+    # variants = extension_api["builtin_classes"]
+    # variants_dir = os.path.join(DEST_DIR, "variants")
+    # os.makedirs(variants_dir, exist_ok=True)
+    # for i in variants:
+    #     with open(os.path.join(variants_dir, f"{i}.lua"), "w") as f:
+    #         write_lua_comment(f, i)
+
+    write_lua_comment(DEST_DIR, "@GlobalScope")
 
     # classes (& singletons)
+    classes = extension_api["classes"] #, extension_api["singletons"]
     classes_dir = os.path.join(DEST_DIR, "classes")
     os.makedirs(classes_dir, exist_ok=True)
-    classes = generate_classes(extension_api["classes"], extension_api["singletons"])
-    for i, v in classes.items():
-        with open(os.path.join(classes_dir, f"{i}.lua"), "w") as f:
-            _write_to_file(f, v)
+    for cls in classes:
+        name = cls["name"]
+        write_lua_comment(classes_dir, name)
 
     # .gdignore
-    with open(os.path.join(DEST_DIR, ".gdignore"), "w") as f:
-            f.writelines([""])
-
-def _get_class_singleton_name(cls: Class, singletons: list[ArgumentOrSingletonOrMember]) -> ArgumentOrSingletonOrMember | None:
-    for singleton in singletons:
-        if singleton["type"] == cls["name"]:
-            return singleton
-    return None
-
-def _get_singleton_constant_type(constant, singleton_constants):
-    for singleton_constant in singleton_constants:
-        if singleton_constant["name"] == constant:
-            return singleton_constant["tpye"]
-    return None
-
-def _write_to_file(f, lines: list[str]):
-    f.writelines(f"{l}\n" for l in PREAMBLE + lines)
-
-
-def _generate_section(name: str) -> str:
-    return dedent(f"\n-- [[ {name} ]]\n")
-
-
-def _arg_name(name: str) -> str:
-    return LUA_KEYWORD_MAP.get(name, name)
+    with open(os.path.join(DEST_DIR, ".gdignore"), "w") as f: f.write("")
 
 # TODO: update from rst special typings to xml
-def _arg_type(name: str, has_default: Any = False) -> str:
-    # handle 'const' removal as 'const' isn't present in Lua
-    if "const" in name:
-        name = name.replace("const", "").strip()
+# def _arg_type(name: str, has_default: Any = False) -> str:
+#     # handle 'const' removal as 'const' isn't present in Lua
+#     if "const" in name:
+#         name = name.replace("const", "").strip()
     
-    if "**" in name: # the closest thing to multi-level & number** pointers in Lua would be references nested in a table
-        if "int" in name:
-            arg_type = "Array[number]"
-        else:
-            arg_type = "Array[any]"
+#     if "**" in name: # the closest thing to multi-level & number** pointers in Lua would be references nested in a table
+#         if "int" in name:
+#             arg_type = "Array[number]"
+#         else:
+#             arg_type = "Array[any]"
         
-    elif "int" in name: # Lua doesn't differentiate between integers and floating-point numbers internally
-        arg_type = "number"
+#     elif "int" in name: # Lua doesn't differentiate between integers and floating-point numbers internally
+#         arg_type = "number"
 
-    elif name == "Variant":
-        arg_type = "any"
+#     elif name == "Variant":
+#         arg_type = "any"
 
-    elif name == "void*": # 'void*' is a pointer to any type
-        arg_type = "any" 
+#     elif name == "void*": # 'void*' is a pointer to any type
+#         arg_type = "any" 
 
-    elif name.startswith("typedarray::"): # express 'typedarray's as 'Array[T]'
-        arg_type = f"Array[{name[len("typedarray::"):]}]"
+#     elif name.startswith("typedarray::"): # express 'typedarray's as 'Array[T]'
+#         arg_type = f"Array[{name[len("typedarray::"):]}]"
 
-    else: # general case cleanup
-        arg_type = name.replace(",", " | ").replace("enum::", "").replace("bitfield::", "")
+#     else: # general case cleanup
+#         arg_type = name.replace(",", " | ").replace("enum::", "").replace("bitfield::", "")
     
-    if has_default: 
-        arg_type += '?'
+#     if has_default: 
+#         arg_type += '?'
 
-    if "*" in arg_type: # Lua uses references not pointers, so theres no need for pointers
-        arg_type = arg_type.replace("*", "").strip()
+#     if "*" in arg_type: # Lua uses references not pointers, so theres no need for pointers
+#         arg_type = arg_type.replace("*", "").strip()
 
-    # print(f"{name} -> {arg_type}")
-    return arg_type
-
-
-def _generate_enum(name, cls):
-    # Header
-    lines = [
-        _generate_section(name), 
-        f"--- @alias {name} {' | '.join(f'`{value["name"]}`' for value in cls['values'])}"
-    ]
-    for value in cls["values"]:
-        lines.append(f"{value['name']} = {value['value']}")
-
-    return lines
-
-# https://docs.godotengine.org/en/stable/classes/class_%40globalscope.html#enumerations
-def generate_enums(enums_list: list[GlobalEnumOrEnum]):
-    enums_dict = {}
-    for cls in enums_list:
-        name = cls["name"]
-        enums_dict[name] = _generate_enum(name, cls)
-    return enums_dict
-
-
-VARIANT_PREAMBLE = [
-    "--- @diagnostic disable: param-type-mismatch, missing-return, redundant-parameter"
-]
-
-VARIANT_DEFINITION = [
-    _generate_section("Variant"),
-    "--- @class Variant",
-    "--- @overload fun(): Variant",
-    "--- @overload fun(from: any): Variant",
-    "--- @operator concat(any): String",
-    "Variant = {}",
-    "",
-    "--- @param self any",
-    "--- @return bool",
-    "function Variant.booleanize(self) end",
-    "",
-    "--- @param self any",
-    "--- @return Variant",
-    "function Variant.duplicate(self) end",
-    "",
-    "--- @param method string",
-    "--- @return Variant",
-    "function Variant:call(method, ...) end",
-    "",
-    "--- @param method string",
-    "--- @return Variant",
-    "function Variant:pcall(method, ...) end",
-    "",
-    "--- @param self any",
-    "--- @return Variant.Type",
-    "function Variant.get_type(self) end",
-    "",
-    "--- @param self any",
-    "--- @return string",
-    "function Variant.get_type_name(self) end",
-    "",
-    "--- @param self any",
-    "--- @return integer",
-    "function Variant.hash(self) end",
-    "",
-    "--- @param self any",
-    "--- @param recursion_count integer",
-    "--- @return integer",
-    "function Variant.recursive_hash(self, recursion_count) end",
-    "",
-    "--- @param other any",
-    "--- @return bool",
-    "function Variant.hash_compare(self, other) end",
-    "",
-    "--- @param self any",
-    "--- @param type any",
-    "--- @return bool",
-    "function Variant.is(self, type) end"
-]
-
-# https://docs.godotengine.org/en/stable/classes/index.html#variant-types
-# https://docs.godotengine.org/en/stable/classes/class_vector3.html
-def _generate_variant(name, cls):
-    # header
-    lines = VARIANT_PREAMBLE + [_generate_section(name)]
-
-    if name == "bool":
-        lines.append("--- @alias bool boolean")
-        lines.append("--- @return bool")
-        lines.append("function bool() end")
-
-    elif name == "int":
-        lines.append("--- @alias int integer")
-        lines.append("--- @return int")
-        lines.append("function int() end")
-
-    elif name == "float":
-        lines.append("--- @alias float number")
-        lines.append("--- @return float")
-        lines.append("function float() end")
-
-    else:
-        can_construct_from_table = name in ["Dictionary", "Array"]
-        is_string = name in ["String", "StringName"]
-
-        class_data = parse_class(name)
-
-        if is_string:
-            lines.append(f"--- @alias {name} string")
-            lines.append(f"{name} = string")
-
-        else:
-            # class
-            inherits = ["Variant"]
-            if indexing_return_type := cls.get("indexing_return_type"):
-                key_type = "any" if cls["is_keyed"] else "int"
-                inherits.append(f"{{ [{key_type}]: {_arg_type(indexing_return_type, indexing_return_type != "Variant")} }}")
-
-            lines.append(f"--- @class {name}: {', '.join(inherits)}")
-
-            # properties (@field)
-            properties = cls.get("members", [])
-            property_count = len(properties)
-            if property_count > 0:
-                properties_data = class_data["properties"]
-                for property in properties:
-                    property_name = property['name']
-                    lines.append("---")
-                    # comment
-                    doc_md = properties_data.get(property_name, "")
-                    if doc_md:
-                        lua_comment = md_to_lua_comments(doc_md)
-                        lines.append(lua_comment)
-
-                    # definition
-                    lines.append(f"--- @field {property_name} {property['type']}")
-
-            # constructors (@overload)
-            if can_construct_from_table:
-                lines.append(f"--- @overload fun(from: table): {name}")
-            for constructor in cls["constructors"]:
-                lines.append(f"--- @overload fun({', '.join(f"{arg['name']}: {arg['type']}" for arg in constructor.get('arguments', []))}): {name}")
-            if name == 'Callable':
-                    lines.append("--- @overload fun(from_lua: function): Callable")
-
-            # operators
-            for op in cls["operators"]:
-                if op["name"] in OPERATOR_MAP:
-                    lines.append(f"--- @operator {OPERATOR_MAP[op['name']]}({op.get('right_type', "")}): {op['return_type']}")
-
-            lines.append(f"{name} = {{}}")
-
-        # constants
-        constants = cls.get("constants", [])
-        constant_count = len(constants)
-        if constant_count > 0:
-            constants_data = class_data["constants"]
-            lines.append("\n--- [[ Constants ]]")
-            for constant in constants:
-                lines.append("")
-                constant_name = constant["name"]
-                # comment
-                doc_md = constants_data.get(constant_name, "")
-                if doc_md:
-                    lua_comment = md_to_lua_comments(doc_md)
-                    lines.append(lua_comment)
-
-                # definition
-                constant_type = constant.get("type", "")
-                if constant_type: 
-                    lines.append(f"--- @type {constant_type}")
-                lines.append(f"{name}.{constant['name']} = {constant['value'].replace("inf", "math.huge")}")
-
-        # enums
-        enums = cls.get("enums", [])
-        enum_count = len(enums)
-        if enum_count > 0:
-            enums_data = class_data["enums"]
-            lines.append("\n--- [[ Enums ]]")
-            for enum in enums:
-                lines.append("")
-                lines.append(f"--- @enum {name}.{enum['name']}")
-                lines.append(f"{name}.{enum['name']} = {{")
-                for value in enum["values"]:
-                    value_name = value["name"]
-                    # comment
-                    doc_md = enums_data.get(value_name, "")
-                    if doc_md:
-                        lua_comment = md_to_lua_comments(doc_md)
-                        lines.append(f"---\n{lua_comment}")
-
-                    # definition
-                    lines.append("--- @type integer") # enums in cpp are always integers
-                    lines.append(f"\t{value_name} = {value['value']},")
-                
-                lines.append("}")
-        
-        # methods
-        if name != "StringName": # we don't repeat StringName methods because they are the same as String's, which are both aliases to `string`
-            methods = cls.get("methods", [])
-            method_count = len(methods)
-            if method_count > 0:
-                methods_data = class_data["methods"]
-                lines.append("\n--- [[ Methods ]]")
-                for method in methods:
-                    method_name = method["name"]
-                    # manually skip methods that have names that are keywords in Lua
-                    if method_name in LUA_KEYWORD_MAP:
-                        continue
-
-                    lines.append("")
-                    # comment
-                    doc_md = methods_data.get(method_name, "")
-                    if doc_md:
-                        lua_comment = md_to_lua_comments(doc_md)
-                        lines.append(lua_comment)
-                    
-                    # definition
-                    if method["is_static"]:
-                        lines.append("--- static")
-                    if is_string:
-                        lines.append(f"--- @param self string")
-                    for arg in method.get('arguments', []):
-                        default_value = arg.get('default_value')
-                        lines.append(f"--- @param {_arg_name(arg['name'])} {_arg_type(arg['type'], default_value)}{f' @default `{default_value}`' if default_value else ''}")
-                    if return_type := method.get("return_type"):
-                        lines.append(f"--- @return {_arg_type(return_type)}")
-                    args = [_arg_name(arg["name"]) for arg in method.get("arguments", [])]
-                    if is_string:
-                        args.insert(0, "self")
-                    if method["is_vararg"]:
-                        args.append("...")
-                    lines.append(f"""function {'string' if is_string else name}{'.' if is_string else ':'}{method['name']}({', '.join(args)}) end""")
-
-    lines.append("")
-    return lines
-
-
-def generate_variants(variants_list: list[BuiltinClass]):
-    variants_dict = {}
-
-    # Variant definition
-    variants_dict["Variant"] = VARIANT_PREAMBLE + VARIANT_DEFINITION
-
-    for cls in variants_list:
-        name = cls["name"]
-        if name == "Nil":
-            continue
-        variants_dict[name] = _generate_variant(name, cls)
-
-    return variants_dict
-
-
-def _generate_class(name, cls, singletons):
-    # header
-    lines = [
-        _generate_section(name),
-        f"--- @class {name}: {cls.get('inherits', 'Variant')}, {{ [string]: any }}"
-    ]
-
-    class_data = parse_class(name)
-
-    # properties
-    properties = cls.get("properties", [])
-    property_count = len(properties)
-    if property_count > 0:
-        properties_data = class_data["properties"]
-        for property in properties:
-            property_name = property['name']
-            lines.append("---")
-            # comment
-            doc_md = properties_data.get(property_name, "")
-            if doc_md:
-                lua_comment = md_to_lua_comments(doc_md)
-                lines.append(lua_comment)
-
-            # definition
-            lines.append(f"--- @field {property_name} {_arg_type(property['type'])}")
-    
-    # ```lua 
-    # <class_name> = {}
-    # ````
-    lines.append(f"{name} = {{}}")
-
-    # constructor
-    singleton = _get_class_singleton_name(cls, singletons)
-    if not singleton and cls["is_instantiable"]:
-        lines.append("")
-        lines.append(f"--- @return {name}")
-        lines.append(f"function {name}:new() end")
-
-    # constants
-    constants = cls.get("constants", [])
-    constant_count = len(constants)
-    if constant_count > 0:
-        constants_data = class_data["constants"]
-        lines.append("\n--- [[ Constants ]]")
-        for constant in constants:
-            lines.append("")
-            constant_name = constant["name"]
-            # comment
-            doc_md = constants_data.get(constant_name, "")
-            if doc_md:
-                lua_comment = md_to_lua_comments(doc_md)
-                lines.append(lua_comment)
-
-            # definition            
-            lines.append(f"{name}.{constant_name} = {constant['value']}")
-
-    # enums
-    enums = cls.get("enums", [])
-    enum_count = len(enums)
-    if enum_count > 0:
-        enums_data = class_data["enums"]
-        lines.append("\n--- [[ Enums ]]")
-        for enum in cls.get("enums", []):
-            lines.append("")
-            lines.append(f"--- @alias {name}.{enum['name']} {' | '.join(f"`{name}.{value['name']}`" for value in enum['values'])}")
-            for value in enum["values"]:
-                value_name = value["name"]
-                # comment
-                doc_md = enums_data.get(value_name, "")
-                if doc_md:
-                    lua_comment = md_to_lua_comments(doc_md)
-                    lines.append(f"---\n{lua_comment}")
-
-                # definition
-                lines.append("--- @type integer") # enums in cpp are always integers
-                lines.append(f"{name}.{value_name} = {value['value']}")
-
-    # signals
-    signals = cls.get("signals", [])
-    signal_count = len(signals)
-    if signal_count > 0:
-        signals_data = class_data["signals"]
-        lines.append("\n--- [[ Signals ]]")
-        for signal in signals:
-            lines.append("")
-            signal_name = signal["name"]
-            # comment
-            doc_md = signals_data.get(signal_name, "")
-            if doc_md:
-                lua_comment = md_to_lua_comments(doc_md)
-                lines.append(f"---{lua_comment}")
-            
-            # definition
-            lines.append("--- @type LuaScriptSignal")
-            lines.append(f"{name}.{signal_name} = signal()")
-
-    # methods
-    methods = cls.get("methods", [])
-    method_count = len(methods)
-    if method_count > 0:
-        methods_data = class_data["methods"]
-        lines.append("\n--- [[ Methods ]]")
-        for method in cls.get("methods", []):
-            # Just skip methods that have names that are keywords in Lua
-            method_name = method["name"]
-            if method_name in LUA_KEYWORD_MAP:
-                continue
-
-            lines.append("")
-            # comment
-            doc_md = methods_data.get(method_name, "")
-            if doc_md:
-                lua_comment = md_to_lua_comments(doc_md)
-                lines.append(lua_comment)
-            
-            # definition
-            if method["is_static"]:
-                lines.append("--- static")
-            for arg in method.get('arguments', []):
-                default_value = arg.get('default_value')
-                lines.append(f"--- @param {_arg_name(arg['name'])} {_arg_type(arg['type'], default_value)}{f' @default `{default_value}`' if default_value else ''}")
-            if return_value := method.get("return_value"):
-                lines.append(f"--- @return {_arg_type(return_value['type'])}")
-            args = [_arg_name(arg["name"]) for arg in method.get("arguments", [])]
-            if method['is_vararg']:
-                args.append("...")
-            lines.append(f"""function {name}:{method['name']}({', '.join(args)}) end""")
-
-    return lines
-
-def generate_classes(classes_list: list[Class], singletons: list[ArgumentOrSingletonOrMember]):
-    classes_dict = {}
-    # Now its specializations
-    for cls in classes_list:
-        name = cls["name"]
-        classes_dict[name] = _generate_class(name, cls, singletons)
-
-    return classes_dict
-
-# https://docs.godotengine.org/en/stable/classes/class_%40globalscope.html#class-globalscope-method-abs
-def _generate_function(name, cls):
-    # Header
-    lines = [_generate_section(name)]
-    arguments =cls.get('arguments', []) 
-
-    for arg in arguments:
-        lines.append(f"--- @param {_arg_name(arg['name'])} {_arg_type(arg['type'])}")
-    if return_type := cls.get("return_type"):
-        lines.append(f"--- @return {_arg_type(return_type)}")
-
-    args = [_arg_name(arg["name"]) for arg in arguments]
-    if cls['is_vararg']:
-        args.append("...")
-    lines.append(f"""function {cls['name']}({', '.join(args)}) end""")
-
-    return lines
-
-# https://docs.godotengine.org/en/stable/classes/class_%40globalscope.html#description
-def generate_functions(functions_list: list[UtilityFunction]):
-    functions_dict = {}
-    
-    for cls in functions_list:
-        name = cls["name"]
-        if name in MANUALLY_DEFINED_UTILITY_FUNCTIONS:
-            continue
-        functions_dict[name] = _generate_function(name, cls)
-        
-    return functions_dict
-
+#     # print(f"{name} -> {arg_type}")
+#     return arg_type
 
 if __name__ == "__main__":
     main()
