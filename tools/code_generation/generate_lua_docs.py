@@ -1,8 +1,15 @@
 import re, requests, pathlib, json
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ElementTree
 
 # for building with github actions we should instead checkout/sparse-checkout?? the repo with a path specification
 # meaning in final we should mimic godot repo doc structure
+
+# update: the official godot-docs repo clones the entire godotengine repo to access the docs
+# why they didnt make that its own repo and the submodule it is outside the scope of thought here
+# going forward this will do the same
+
+
+# path config
 
 CACHE = pathlib.Path("godot_docs")
 CACHE.mkdir(exist_ok=True)
@@ -16,158 +23,61 @@ BRANCH = "master"
 DOC_DIR = CACHE / f"{BRANCH}"
 DOC_DIR.mkdir(exist_ok=True)
 
-# example xml file
-# https://raw.githubusercontent.com/godotengine/godot/refs/heads/master/doc/classes/%40GlobalScope.xml
-DOCS_BASE = f"https://raw.githubusercontent.com/godotengine/godot/refs/heads/{BRANCH}/doc/classes"
+ROOT = pathlib.Path("lib/godotengine")
 
-# https://docs.godotengine.org/en/stable/classes/class_multiplayerpeer.html
-WIKI_VER = "stable"
-WIKI_URL_BASE = f"https://docs.godotengine.org/en/{WIKI_VER}"
-WIKI_URL_BASE_CLASS = f"{WIKI_URL_BASE}/classes/class_"
+DOCS_ROOT = ROOT / "docs"              # core docs (doc/classes/*.xml)
+MODULES_ROOT = ROOT / "modules"       # modules/*/doc_classes/*.xml
 
-# example local wiki reference
-# [constant PROPERTY_USAGE_SCRIPT_VARIABLE]
-# could we link to our definition instead? i think that might be better
-# ---@see PROPERTY_USAGE_SCRIPT_VARIABLE
-# https://docs.godotengine.org/en/stable/classes/class_@globalscope.html#class-globalscope-constant-property-usage-script-variable
+CORE_CLASSES_DIR = DOCS_ROOT / "classes"
 
-def fetch_url(url, cache_file: Path):
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    if not cache_file.exists():
-        print("fetching", url)
-        request = requests.get(url, headers=HEADERS)
-        request.raise_for_status()
-        text = request.text
-        cache_file.write_text(text, encoding="utf-8")
-        return text
+# indexing
 
-    return cache_file.read_text(encoding="utf-8")
+class_index: Dict[str, pathlib.Path] = {}
+module_index: Dict[str, str] = {}  # class -> module name
 
-# and to make things harder modules have their doc_classes in their own module
-# example: https://github.com/godotengine/godot/tree/master/modules/csg/doc_classes
-# we can do a simple partial match 
 
-HEADERS = {}
+def build_index():
+    """Scan core + modules and index all XML class files."""
+    # core classes
+    if CORE_CLASSES_DIR.exists():
+        for file in CORE_CLASSES_DIR.glob("*.xml"):
+            class_index[file.stem] = file
 
-# import os
-# token = os.getenv("GITHUB_TOKEN")
-# # print(token)
-# if token:
-#     HEADERS["Authorization"] = token
+    # module classes
+    if MODULES_ROOT.exists():
+        for module_dir in MODULES_ROOT.iterdir():
+            doc_dir = module_dir / "doc_classes"
+            if not doc_dir.exists():
+                continue
 
-MODULES_URL = f"https://api.github.com/repos/godotengine/godot/contents/modules?ref={BRANCH}"
-DOC_MODULES_DIR = DOC_DIR / "modules"
-DOC_MODULES_DIR.mkdir(exist_ok=True)
+            for file in doc_dir.glob("*.xml"):
+                class_name = file.stem
+                class_index[class_name] = file
+                module_index[class_name] = module_dir.name
 
-def module_dir(module_name):
-    return DOC_MODULES_DIR / module_name
 
-def module_json_path(module_name):
-    return module_dir(module_name) / "module.json"
+# build once
+build_index()
 
-def doc_classes_dir(module_name):
-    return module_dir(module_name) / "doc_classes"
 
-def fetch_json(url, cache_file: Path):
-    return json.loads(fetch_url(url, cache_file))
-    # cache_file.parent.mkdir(parents=True, exist_ok=True)
+def find_class_file(name: str) -> pathlib.Path:
+    """Resolve a class name to its XML file."""
+    if name in class_index:
+        return class_index[name]
 
-    # if cache_file.exists():
-    #     return json.loads(cache_file.read_text(encoding="utf-8"))
+    raise FileNotFoundError(f"Class '{name}' not found in core or modules")
 
-    # print("fetching", url)
-    # resp = requests.get(url)
-    # resp.raise_for_status()
 
-    # data = resp.json()
-    # cache_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+def fetch_class(name: str) -> str:
+    """Load XML text from disk."""
+    path = find_class_file(name)
+    return path.read_text(encoding="utf-8")
 
-    # return data
 
-def get_modules():
-    data = fetch_json(MODULES_URL, DOC_MODULES_DIR / "modules.json")
-
-    return [
-        item["name"]
-        for item in data
-        if item["type"] == "dir"
-    ]
-
-def load_module(module_name):
-    base = module_dir(module_name)
-    base.mkdir(parents=True, exist_ok=True)
-
-    module_url = f"https://api.github.com/repos/godotengine/godot/contents/modules/{module_name}"
-    module_json = fetch_json(f"{module_url}?ref={BRANCH}", module_json_path(module_name))
-
-    doc_classes = {}
-
-    for item in module_json:
-        if item["type"] == "dir" and item["name"] == "doc_classes":
-            doc_dir = doc_classes_dir(module_name)
-            doc_dir.mkdir(parents=True, exist_ok=True)
-
-            doc_url = f"{module_url}/doc_classes?ref={BRANCH}"
-            docs = fetch_json(doc_url, doc_dir / "index.json")
-
-            for doc in docs:
-                if doc["type"] == "file" and doc["name"].endswith(".xml"):
-                    name = doc["name"].removesuffix(".xml")
-
-                    doc_url = f"{module_url}/doc_classes/{doc['name']}?ref={BRANCH}"
-                    doc_data = fetch_json(doc_url, doc_dir / f"{name}.json")
-
-                    doc_classes[name] = doc_data
-
-    return doc_classes
-
-def load_modules():
-    modules = {}
-
-    for module in get_modules():
-        modules[module] = load_module(module)
-
-    return modules
-
-def load_module_docs(module):
-    doc_dir = DOC_MODULES_DIR / module / "doc_classes"
-
-    if not doc_dir.exists():
-        return {}
-
-    docs = {}
-
-    for file in doc_dir.glob("*.json"):
-        name = file.stem
-        docs[name] = json.loads(file.read_text(encoding="utf-8"))
-
-    return docs
-
-def find_module_for_class(class_name):
-    modules = load_modules()
-
-    matches = [
-        m for m in modules
-        if m.lower() in class_name.lower()
-    ]
-
-    return matches # could be empty or multiple
-
-def find_module_doc_for_class(class_name):
-    modules = find_module_for_class(class_name)
-
-    for module in modules:
-        docs = load_module_docs(module)
-
-        if class_name in docs:
-            doc = docs[class_name]
-            download_url = doc["download_url"]
-            return fetch_url(download_url, DOC_DIR / f"{class_name}.xml")
-
-    raise "Couldn't find module doc for class..."
+# xml parsing
 
 def parse_godot_class_xml(xml_text: str) -> Dict[str, Any]:        
-    root = ET.fromstring(xml_text)
+    root = ElementTree.fromstring(xml_text)
 
     if root.tag != "class":
         raise ValueError("Expected root tag <class>")
@@ -285,21 +195,11 @@ def parse_godot_class_xml(xml_text: str) -> Dict[str, Any]:
 
     return class_data
 
-def fetch_class(name):
-    try:
-        _class = fetch_url(f"{DOCS_BASE}/{name}.xml", DOC_DIR / f"{name}.xml")
-    except Exception as e:
-        print(name)
-        
-        try:
-            _class = find_module_doc_for_class(name)
-        except Exception as e:
-            print(e)
-
-    return _class
-
 def get_class_data(name: str) -> Dict[str, Any]:
     return parse_godot_class_xml(fetch_class(name))
+
+
+# lua conversion
 
 godot_type_to_lua_mapping = {
     # "int": "integer",
@@ -310,6 +210,7 @@ godot_type_to_lua_mapping = {
 def godot_type_to_lua(godot_type: str) -> str:
     return godot_type_to_lua_mapping.get(godot_type, godot_type)
 
+
 # fix invalid mappings due to syntax differences across languages
 godot_param_name_to_lua_mapping = {
     "end": "_end"
@@ -317,7 +218,8 @@ godot_param_name_to_lua_mapping = {
 def godot_param_name_to_lua(godot_name: str) -> str:
     return godot_param_name_to_lua_mapping.get(godot_name, godot_name)
 
-def xml_to_md(text, class_name):
+
+def xml_to_lua(text, class_name):
     # references (example: [method Image.rotate_90])
     def repl_ref(m):
         kind = m.group(1)
@@ -535,23 +437,22 @@ def godot_class_to_lua_annotations(class_data: dict) -> str:
                 lines.append(f"function {class_name}.{name}({params}) end")
             lines.append("")
 
-    return xml_to_md("\n".join(lines), class_name)
+    return xml_to_lua("\n".join(lines), class_name)
 
-def get_godot_class_lua_annotations(_class):
+def get_godot_class_lua(_class):
     return godot_class_to_lua_annotations(get_class_data(_class))
+
+# tests
 
 def _class_test():
     # _class = "@GlobalScope"
-    # get_godot_class_lua_annotations(_class)
-
     _class = "MultiplayerPeer"
-    get_godot_class_lua_annotations(_class)
 
-    # 3 nested functions for an example :wilted_rose:
-    # module_class = "CSGBox3D"
-    # print(godot_class_to_lua_annotations(parse_godot_class_xml(find_module_doc_for_class(module_class)))) 
+    # get_godot_class_lua(_class)
+    get_godot_class_lua(_class)
 
-    # print(get_godot_class_lua_annotations(module_class)) 
+    module_class = "CSGBox3D"
+    get_godot_class_lua(module_class)
 
 if __name__ == "__main__":
     _class_test()

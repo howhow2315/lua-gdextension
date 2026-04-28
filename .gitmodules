@@ -7,12 +7,18 @@
 [submodule "sol2"]
 	path = lib/sol2
 	url = https://github.com/Assumeru/sol2.git
-[submodule "lib/luajit"]
+
+[submodule "luajit"]
 	path = lib/luajit
 	url = https://github.com/LuaJIT/LuaJIT.git
-[submodule "lib/tree-sitter"]
+
+[submodule "tree-sitter"]
 	path = lib/tree-sitter
 	url = https://github.com/tree-sitter/tree-sitter.git
-[submodule "lib/tree-sitter-lua"]
+[submodule "tree-sitter-lua"]
 	path = lib/tree-sitter-lua
 	url = https://github.com/tree-sitter-grammars/tree-sitter-lua.git
+
+[submodule "godot"]
+	path = lib/godot
+	url = https://github.com/godotengine/godot.git
