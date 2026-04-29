@@ -35,6 +35,3 @@ addons/lua-gdextension/README.md
 addons/lua-gdextension/LICENSE
 addons/lua-gdextension/lua_api_definitions
 !addons/lua-gdextension/lua_api_definitions/manual
-
-# Godot documentation files that were pulled
-godot_docs
