@@ -60,9 +60,9 @@ def main():
 
     def write_lua_comment(dir, name):
         try:
-            lua_comment = generate_lua_docs.get_godot_class_lua_annotations(name)
+            lua_comment = generate_lua_docs.get_godot_class_lua(name)
         except Exception as e:
-            print(f"Failed to get class data for {name}: Have you tried checking if the Godot doc version has this class? 'master' should if its not outdated or invalid")
+            print(f"Failed to get class data for {name}")
             return
 
         with open(os.path.join(dir, f"{name}.lua"), "w") as f:

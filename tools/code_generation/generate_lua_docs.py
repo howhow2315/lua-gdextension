@@ -11,37 +11,40 @@ import xml.etree.ElementTree as ElementTree
 
 # path config
 
-CACHE = pathlib.Path("godot_docs")
-CACHE.mkdir(exist_ok=True)
-
 BRANCH = "master"
 # BRANCH = "4.6"
 
 # potentially add translation (.po) support
 # https://github.com/godotengine/godot/blob/master/doc/translations
 # DOC_LANGUAGE = "en"
-DOC_DIR = CACHE / f"{BRANCH}"
-DOC_DIR.mkdir(exist_ok=True)
 
-ROOT = pathlib.Path("lib/godotengine")
+GODOT_ROOT = pathlib.Path("lib/godot")
 
-DOCS_ROOT = ROOT / "docs"              # core docs (doc/classes/*.xml)
-MODULES_ROOT = ROOT / "modules"       # modules/*/doc_classes/*.xml
+DOCS_ROOT = GODOT_ROOT / "doc"  # core docs (doc/classes/*.xml)
+MODULES_ROOT = GODOT_ROOT / "modules" # modules/*/doc_classes/*.xml
+PLATFORMS_ROOT = GODOT_ROOT / "platform" # platform/*/doc_classes/*.xml
 
-CORE_CLASSES_DIR = DOCS_ROOT / "classes"
+CLASSES_DIR = DOCS_ROOT / "classes"
+
+# https://docs.godotengine.org/en/stable/classes/class_multiplayerpeer.html
+WIKI_VER = "stable"
+WIKI_URL_BASE = f"https://docs.godotengine.org/en/{WIKI_VER}"
+WIKI_URL_BASE_CLASS = f"{WIKI_URL_BASE}/classes/class_"
+
+# EditorExportPlatformIOS.application/targeted_device_family = nil
+# include godots formatting for nested values including generation of the table
 
 # indexing
-
 class_index: Dict[str, pathlib.Path] = {}
-module_index: Dict[str, str] = {}  # class -> module name
-
 
 def build_index():
     """Scan core + modules and index all XML class files."""
     # core classes
-    if CORE_CLASSES_DIR.exists():
-        for file in CORE_CLASSES_DIR.glob("*.xml"):
+    if CLASSES_DIR.exists():
+        for file in CLASSES_DIR.glob("*.xml"):
             class_index[file.stem] = file
+    else:
+        raise FileNotFoundError(f"Couldn't find folder {CLASSES_DIR}")
 
     # module classes
     if MODULES_ROOT.exists():
@@ -53,12 +56,24 @@ def build_index():
             for file in doc_dir.glob("*.xml"):
                 class_name = file.stem
                 class_index[class_name] = file
-                module_index[class_name] = module_dir.name
+    else:
+        raise FileNotFoundError(f"Couldn't find folder {MODULES_ROOT}")
 
+    # platform classes (export)
+    if PLATFORMS_ROOT.exists():
+        for platform_dir in PLATFORMS_ROOT.iterdir():
+            doc_dir = platform_dir / "doc_classes"
+            if not doc_dir.exists():
+                continue
+
+            for file in doc_dir.glob("*.xml"):
+                class_name = file.stem
+                class_index[class_name] = file
+    else:
+        raise FileNotFoundError(f"Couldn't find folder {PLATFORMS_ROOT}")
 
 # build once
 build_index()
-
 
 def find_class_file(name: str) -> pathlib.Path:
     """Resolve a class name to its XML file."""
@@ -220,7 +235,8 @@ def godot_param_name_to_lua(godot_name: str) -> str:
 
 
 def xml_to_lua(text, class_name):
-    # references (example: [method Image.rotate_90])
+    # references 
+    # (example: [method Image.rotate_90])
     def repl_ref(m):
         kind = m.group(1)
         name = m.group(2)
@@ -246,7 +262,8 @@ def xml_to_lua(text, class_name):
         text
     )
 
-    # url blocks (example: [url=https://github.com/godotengine/godot/issues]the GitHub Issue Tracker[/url])
+    # url blocks 
+    # (example: [url=https://github.com/godotengine/godot/issues]the GitHub Issue Tracker[/url])
     def repl_url(m):
         url = m.group(1)
         text = m.group(2)
@@ -259,7 +276,8 @@ def xml_to_lua(text, class_name):
         flags=re.DOTALL
     )
 
-    # titled href; [$CLASS] -> [$CLASS]($DOCS_URL/$CLASS)
+    # titled href; 
+    # example: [$CLASS] -> [$CLASS]($DOCS_URL/$CLASS)
     def repl(m):
         name = m.group(1)
         return f"[{name}]({WIKI_URL_BASE_CLASS}{name.lower()}.html)"
@@ -271,7 +289,7 @@ def xml_to_lua(text, class_name):
     )
 
     # whitespace
-    # text = text.replace("	", "").strip()
+    text = text.replace("	", "").strip()
 
     # newlines
     # text = text.replace("\n", " ")
