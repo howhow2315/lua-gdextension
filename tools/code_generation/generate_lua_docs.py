@@ -18,65 +18,55 @@ BRANCH = "master"
 # https://github.com/godotengine/godot/blob/master/doc/translations
 # DOC_LANGUAGE = "en"
 
-GODOT_ROOT = pathlib.Path("lib/godot")
-
-DOCS_ROOT = GODOT_ROOT / "doc"  # core docs (doc/classes/*.xml)
-MODULES_ROOT = GODOT_ROOT / "modules" # modules/*/doc_classes/*.xml
-PLATFORMS_ROOT = GODOT_ROOT / "platform" # platform/*/doc_classes/*.xml
-
-CLASSES_DIR = DOCS_ROOT / "classes"
-
 # https://docs.godotengine.org/en/stable/classes/class_multiplayerpeer.html
 WIKI_VER = "stable"
 WIKI_URL_BASE = f"https://docs.godotengine.org/en/{WIKI_VER}"
 WIKI_URL_BASE_CLASS = f"{WIKI_URL_BASE}/classes/class_"
 
-# EditorExportPlatformIOS.application/targeted_device_family = nil
-# include godots formatting for nested values including generation of the table
+GODOT_ROOT = pathlib.Path("lib/godot")
+CLASSES_DIR = GODOT_ROOT / "doc/classes" # core docs (doc/classes/*.xml)
+
+NESTED_DIRS = [
+    GODOT_ROOT / "modules", # modules/*/doc_classes/*.xml
+
+    # proper formatting isnt completed for this yet, nor is it really important for any functionality
+    # GODOT_ROOT / "platform" # platform/*/doc_classes/*.xml
+]
 
 # indexing
 class_index: Dict[str, pathlib.Path] = {}
 
 def build_index():
     """Scan core + modules and index all XML class files."""
+
+    def add_classes(_dir):
+        if _dir.exists():
+            for file in _dir.glob("*.xml"):
+                class_name = file.stem
+                class_index[class_name] = file
+        else:
+            raise FileNotFoundError(f"Couldn't find folder {_dir}")
+
     # core classes
-    if CLASSES_DIR.exists():
-        for file in CLASSES_DIR.glob("*.xml"):
-            class_index[file.stem] = file
-    else:
-        raise FileNotFoundError(f"Couldn't find folder {CLASSES_DIR}")
+    add_classes(CLASSES_DIR)
 
-    # module classes
-    if MODULES_ROOT.exists():
-        for module_dir in MODULES_ROOT.iterdir():
-            doc_dir = module_dir / "doc_classes"
-            if not doc_dir.exists():
-                continue
+    # nested classes
+    for nested_root in NESTED_DIRS:
+        if nested_root.exists():
+            for nested_dir in nested_root.iterdir():
+                doc_dir = nested_dir / "doc_classes"
+                if doc_dir.exists():
+                    add_classes(doc_dir)
+        else:
+            raise FileNotFoundError(f"Couldn't find folder {nested_root}")
 
-            for file in doc_dir.glob("*.xml"):
-                class_name = file.stem
-                class_index[class_name] = file
-    else:
-        raise FileNotFoundError(f"Couldn't find folder {MODULES_ROOT}")
-
-    # platform classes (export)
-    if PLATFORMS_ROOT.exists():
-        for platform_dir in PLATFORMS_ROOT.iterdir():
-            doc_dir = platform_dir / "doc_classes"
-            if not doc_dir.exists():
-                continue
-
-            for file in doc_dir.glob("*.xml"):
-                class_name = file.stem
-                class_index[class_name] = file
-    else:
-        raise FileNotFoundError(f"Couldn't find folder {PLATFORMS_ROOT}")
 
 # build once
 build_index()
 
 def find_class_file(name: str) -> pathlib.Path:
     """Resolve a class name to its XML file."""
+
     if name in class_index:
         return class_index[name]
 
@@ -85,6 +75,7 @@ def find_class_file(name: str) -> pathlib.Path:
 
 def fetch_class(name: str) -> str:
     """Load XML text from disk."""
+
     path = find_class_file(name)
     return path.read_text(encoding="utf-8")
 
@@ -278,22 +269,18 @@ def xml_to_lua(text, class_name):
 
     # titled href; 
     # example: [$CLASS] -> [$CLASS]($DOCS_URL/$CLASS)
-    def repl(m):
+    def replace_titled_href(m):
         name = m.group(1)
         return f"[{name}]({WIKI_URL_BASE_CLASS}{name.lower()}.html)"
 
     text = re.sub(
         r"\[([A-Z][A-Za-z0-9_]*)\](?!\()",
-        repl,
+        replace_titled_href,
         text
     )
 
     # whitespace
     text = text.replace("	", "").strip()
-
-    # newlines
-    # text = text.replace("\n", " ")
-    # text = text.replace("\n", "\n--- ")
 
     # bold
     text = text.replace("[b]", "**").replace("[/b]", "**")
@@ -309,6 +296,18 @@ def xml_to_lua(text, class_name):
     text = text.replace("[gdscript]", "```gdscript\n--- # GDScript").replace("[/gdscript]", "```")
     text = text.replace("[csharp]", "\n--- ```csharp\n--- // C#").replace("[/csharp]", "```")
 
+    def replace_codeblock_lang(m):
+        lang = m.group(1)
+        return f"--- ```{lang}"
+    
+    text = re.sub(
+        r"^.*?\[codeblock\s+lang=(\w+)\]",
+        replace_codeblock_lang,
+        text
+    )
+    # [codeblock lang=text]
+
+
     # codeblocks
     text = text.replace("[codeblocks]", "").replace("[/codeblocks]", "")
 
@@ -323,7 +322,7 @@ def godot_class_to_lua_annotations(class_data: dict) -> str:
     is_global = class_name == "@GlobalScope"
 
     lines = [
-        f"---@diagnostic disable: missing-return, undefined-doc-name, assign-type-mismatch{is_global and ", lowercase-global" or ""}",
+        f"--- @diagnostic disable: missing-return, undefined-doc-name, assign-type-mismatch{is_global and ", lowercase-global" or ""}",
         ""
     ]
 
@@ -347,9 +346,53 @@ def godot_class_to_lua_annotations(class_data: dict) -> str:
         lines.append(f"--- [[ {_title} ]]")
         lines.append("")
 
-    def add_description(_desc, _append = ""):
+    def add_description(_desc, _append=""):
         if _desc:
-            lines.append(f"--- {clean_comment(_desc)}")
+            _desc = clean_comment(_desc)
+
+            refs = [] # collect @see targets
+
+            def repl_ref(m):
+                kind = m.group(1)
+                full_name = m.group(2)
+
+                if "." in full_name:
+                    scope, name = full_name.split(".", 1)
+                    class_part = scope.lower()
+                    ref = f"{scope}.{name}"  # already fully qualified
+                else:
+                    scope = class_name
+                    name = full_name
+                    class_part = class_name.lower()
+
+                    if class_name == "@GlobalScope":
+                        ref = name
+                    else:
+                        ref = f"{scope}.{name}"
+
+                anchor = f"class-{class_part}-{kind}-{name.lower()}"
+                url = f"{WIKI_URL_BASE_CLASS}{class_part}.html#{anchor}"
+                link = f"[{name}]({url})"
+
+                refs.append(ref)
+                return link
+
+            _desc = re.sub(
+                r"\[(constant|member|method|signal|enum|param)\s+([A-Za-z0-9_.]+)\]",
+                repl_ref,
+                _desc
+            )
+            # [method Window.popup_centered_clamped]
+
+            # add main description
+            lines.append(f"--- {_desc}")
+
+            # append @see lines at the end
+            if len(refs) > 0:
+                lines.append(f"---")
+                for ref in refs:
+                    lines.append(f"--- @see {ref}")
+
             if _append:
                 lines.append(_append)
 
@@ -388,10 +431,31 @@ def godot_class_to_lua_annotations(class_data: dict) -> str:
                 lines.append(f"{class_name}.{name} = {value}")
             lines.append("")
 
+    # we need to create empty tables under each section
+    # like: EditorExportPlatformIOS.capabilities/performance_gaming_tier
+    # ->
+    # EditorExportPlatformIOS.capabilities = {}
+    # EditorExportPlatformIOS.capabilities.performance_gaming_tier = nil
+    # 
+    # --- Requires the graphics performance and features of the A17 Pro and later chips.
+    # --- Enabling this option limits supported devices to: iPhone 15 Pro and newer.
+    # --- @type boolean
+    # EditorExportPlatformIOS.capabilities/performance_gaming_tier = nil
+
+    # --- Path to the custom export template. If left empty, default template is used.
+    # --- @type String
+    # EditorExportPlatformIOS.custom_template/debug = nil
+
+    # --- Path to the custom export template. If left empty, default template is used.
+    # --- @type String
+    # EditorExportPlatformIOS.custom_template/release = nil
+
+
     # members (Properties)
     if class_data["members"]:
         add_section("Properties")
         for name, member in sorted(class_data["members"].items()):
+            # name = name.replace("/", ".")
             # {'type': 'Geometry2D', 'setter': '', 'getter': '', 'default': None, 'description': 'The [Geometry2D] singleton.'}
             value = member.get("default", "nil")
             add_description(member.get("description", ""))
