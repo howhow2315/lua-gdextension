@@ -10,7 +10,7 @@
   ```
 
 ### Fixed
-- `Variant.__len` metamethod
+- `Variant.__len` metamethod crashes
 
 ### Change
 - Updated Lua to 5.4.8
