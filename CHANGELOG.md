@@ -1,5 +1,8 @@
 # Changelog
-## [Unreleased](https://github.com/gilzoide/lua-gdextension/compare/0.8.0...HEAD)
+## [Unreleased](https://github.com/gilzoide/lua-gdextension/compare/0.8.1...HEAD)
+
+
+## [0.8.1](https://github.com/gilzoide/lua-gdextension/releases/tag/0.8.1)
 ### Added
 - Construct `Callable` from function in Lua code:
   ```lua
