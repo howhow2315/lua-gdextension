@@ -16,3 +16,6 @@
 [submodule "lib/tree-sitter-lua"]
 	path = lib/tree-sitter-lua
 	url = https://github.com/tree-sitter-grammars/tree-sitter-lua.git
+[submodule "godot"]
+	path = lib/godot
+	url = https://github.com/godotengine/godot
