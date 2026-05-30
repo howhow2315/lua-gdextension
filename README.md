@@ -5,7 +5,7 @@
 
 <img src="addons/lua-gdextension/icon.png" alt="Lua GDExtension icon" width="150" height="150"/>
 
-Extension for using the [Lua programming language](https://www.lua.org/) in Godot 4.4+
+Extension for using the [Lua programming language](https://www.lua.org/) in Godot 4.5+
 
 With this addon, you can program your game or application directly in Lua.
 You can also create sandboxed Lua states for external modding/scripting support, as many as necessary.
