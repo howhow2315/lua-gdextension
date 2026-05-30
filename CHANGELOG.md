@@ -1,5 +1,10 @@
 # Changelog
 ## [Unreleased](https://github.com/gilzoide/lua-gdextension/compare/0.8.1...HEAD)
+### Added
+- Implemented `get_property_list` for LuaScriptInstance
+
+### Fixed
+- Exported properties of tool scripts now appear in the inspector
 
 
 ## [0.8.1](https://github.com/gilzoide/lua-gdextension/releases/tag/0.8.1)
